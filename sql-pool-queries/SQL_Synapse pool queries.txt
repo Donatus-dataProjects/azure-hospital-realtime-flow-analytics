@@ -1,0 +1,111 @@
+-- TSQL
+CREATE MASTER KEY ENCRYPTION BY PASSWORD = 'Password>>';
+
+-- Create a scope to get access to the storage account -- run this first
+CREATE DATABASE SCOPED CREDENTIAL storage_credential
+WITH IDENTITY = 'Managed Identity';
+
+
+--- Difine the data source  run second
+CREATE EXTERNAL DATA SOURCE gold_data_source
+WITH(
+    TYPE = HADOOP,
+    LOCATION = '"abfss://container@<<"Storageaccount_name">>.dfs.core.windows.net/"',
+    CREDENTIAL = storage_credential
+)
+-- location avove is the gold layer part
+
+-- third run --
+-- Define Format 
+CREATE EXTERNAL FILE FORMAT ParquetFileFormat
+WITH(
+    FORMAT_TYPE = PARQUET
+);
+
+
+--fourth run --
+--CREATE TABLES  
+--PATIENT DIMENSION
+-- CREATE EXTERNAL TABLE dbo.dim_patient (
+--     patient_id VARCHAR(50),
+--     gender VARCHAR(10),
+--     age INT,
+--     effective_from DATETIME2,
+--     surrogate_key BIGINT,
+--     effective_to DATETIME2,
+--     is_current BIT
+-- )
+-- WITH (
+--     LOCATION = 'dim_patient/',
+--     DATA_SOURCE = gold_data_source,
+--     FILE_FORMAT = ParquetFileFormat
+-- );
+
+-- Drop old table
+DROP EXTERNAL TABLE dbo.dim_patient
+
+-- Step 2: Recreate with correct column order
+-- Recreate with surrogate_key as VARCHAR
+-- Step 2: Recreate matching EXACT Databricks order and types
+CREATE EXTERNAL TABLE dbo.dim_patient (
+    patient_id      VARCHAR(50),
+    gender          VARCHAR(10),
+    age             INT,
+    effective_from  DATETIME2,
+    surrogate_key   BIGINT,
+    effective_to    DATETIME2,
+    is_current      VARCHAR(10)    -- position 7 boolean saved as string in parquet
+)
+WITH (
+    LOCATION = 'dim_patient/',
+    DATA_SOURCE = gold_data_source,
+    FILE_FORMAT = ParquetFileFormat
+);
+
+
+
+-- fifth run
+--DEPARTMENT DIMENSION
+CREATE EXTERNAL TABLE dbo.dim_department (
+    surrogate_key BIGINT,
+    department NVARCHAR(200),
+    hospital_id INT
+)
+WITH (
+    LOCATION = 'dim_department/',
+    DATA_SOURCE = gold_data_source,
+    FILE_FORMAT = ParquetFileFormat
+);
+
+
+
+-- six run--
+--FACT TABLE
+CREATE EXTERNAL TABLE dbo.fact_patient_flow (
+    fact_id BIGINT,
+    patient_sk BIGINT,
+    department_sk BIGINT,
+    admission_time DATETIME2,
+    discharge_time DATETIME2,
+    admission_date DATE,
+    length_of_stay_hours FLOAT,
+    is_currently_admitted BIT,
+    bed_id INT,
+    event_ingestion_time DATETIME2
+)
+WITH (
+    LOCATION = 'fact_patient_flow/',
+    DATA_SOURCE = gold_data_source,
+    FILE_FORMAT = ParquetFileFormat
+);
+
+
+SELECT * FROM dbo.dim_patient;
+
+-- Run this directly in Synapse Built-in
+-- This reads raw parquet without any schema definition
+SELECT *
+FROM OPENROWSET(
+    BULK 'https://hospitalstoragedon.dfs.core.windows.net/gold/dim_patient/**',
+    FORMAT = 'PARQUET'
+) AS result
